@@ -1,7 +1,7 @@
 {
   "name": "sms-coupon-sender",
   "version": "1.0.0",
-  "description": "Upload a CSV (contact_no, outlate_name, cupon_code, stage) and send coupon SMS via SSL Wireless SMS Plus API",
+  "description": "Upload a CSV (contact_no, outlate_name, stage) and send campaign SMS via SSL Wireless SMS Plus API",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",

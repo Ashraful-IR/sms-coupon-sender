@@ -4,7 +4,7 @@ A small HTTP service that sends one coupon SMS per recipient through SSL Wireles
 and records the outcome of every single message.
 
 You upload a CSV of people, the service validates it, and then sends in the background - one message
-per row, built from a template (`{outlate_name}`, `{cupon_code}` ...). It is built for big lists:
+per row, built from a template (`{outlate_name}`, `{stage}` ...). It is built for big lists:
 100,000-200,000 rows in one file is a normal run, so a real send can take minutes to hours. Every row
 ends up with a definite status, and you download a result CSV when it finishes.
 
@@ -16,9 +16,9 @@ Gateway reference (endpoints, parameters, status codes): [doc/ssl-push-sms-api-v
 
 ## What it does
 
-- Accepts a CSV with `contact_no`, `outlate_name`, `cupon_code` and optional `stage`.
+- Accepts a CSV with `contact_no`, `outlate_name` and `stage`; `cupon_code` is optional and only stored.
 - Validates and normalises every row up front: bad mobile numbers, missing fields and duplicate
-  (`contact_no` + `cupon_code`) rows are marked `skipped` and are never sent.
+  (`contact_no` + `stage`) rows are marked `skipped` and are never sent.
 - Renders a per-recipient message from `SMS_TEMPLATE` and sends it with your SSL Wireless credentials.
 - Sends in batches, using whichever of the three documented Push SMS endpoints you configure
   (`single`, `bulk` or `dynamic`) - see [Send modes](#send-modes).
@@ -62,7 +62,7 @@ in progress; if it stops, start it again and unfinished jobs resume on their own
 | `SSL_URL` / `SSL_BULK_URL` / `SSL_DYNAMIC_URL` | derived from `SSL_BASE_URL` | Per-endpoint overrides |
 | `SMS_MODE` | `single` | Which Push SMS endpoint to use: `single`, `bulk` or `dynamic` |
 | `BATCH_SIZE` | `100` | Max numbers per request (gateway caps this at 100) |
-| `SMS_TEMPLATE` | a sample coupon text | Message body; placeholders `{contact_no}` `{outlate_name}` `{cupon_code}` `{stage}` |
+| `SMS_TEMPLATE` | the campaign text | Message body; placeholders `{contact_no}` `{outlate_name}` `{cupon_code}` `{stage}`. `{stage}` renders as a Bangla ordinal (`1` -> `১ম`, `2` -> `২য়`, `3` -> `৩য়`, `4` -> `৪র্থ`) |
 | `RATE_PER_SECOND` | `10` | Requests started per second (**requests**, not SMS) |
 | `CONCURRENCY` | `10` | Requests in flight at once |
 | `CONSECUTIVE_FAILURE_LIMIT` | `25` | Halt the job after this many failures in a row |
@@ -74,8 +74,7 @@ in progress; if it stops, start it again and unfinished jobs resume on their own
 
 ## Run a job end to end
 
-There is no UI: the flow is four HTTP calls. The commands below are bash, and assume the service is
-running and you are in the project root. `samples/contacts.csv` is a one-row file you can try them with.
+There is no UI: the flow is four HTTP calls. The commands below are bash, and assume the serviceis running and you are in the project root. `samples/contacts.csv` is a small file you can try them with.
 
 Set two shell variables first:
 

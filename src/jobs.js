@@ -9,8 +9,10 @@ const config = require('./config');
 const { sendSingle, sendBulk, sendDynamic, credentialsConfigured } = require('./smsClient');
 const { normalizeMsisdn, render } = require('./utils');
 
-// "stage" is optional in the upload; it is carried through to the result CSV.
-const REQUIRED_COLUMNS = ['contact_no', 'outlate_name', 'cupon_code'];
+// Required upload columns. "stage" is what the message body carries (rendered as a Bangla
+// ordinal) and it also lands in the result CSV. "cupon_code" is optional: it is stored with
+// the row for older files but is no longer sent or validated.
+const REQUIRED_COLUMNS = ['contact_no', 'outlate_name', 'stage'];
 const RESULT_COLUMNS = ['contact_no', 'stage', 'status', 'response', 'message', 'sending_time'];
 const ROW_STATUSES = ['pending', 'sending', 'sent', 'failed', 'skipped', 'unknown', 'dry_run'];
 
@@ -95,14 +97,14 @@ async function createJobFromFile(filePath, originalName, force) {
       const msisdn = normalizeMsisdn(rec.contact_no);
       let status = 'pending';
       let response = null;
-      if (!msisdn || !rec.outlate_name || !rec.cupon_code) {
+      if (!msisdn || !rec.outlate_name || !rec.stage) {
         status = 'skipped';
-        response = 'SKIPPED: invalid contact_no, outlate_name or cupon_code';
+        response = 'SKIPPED: invalid contact_no, outlate_name or stage';
       } else {
-        const key = `${msisdn}|${rec.cupon_code}`;
+        const key = `${msisdn}|${rec.stage}`;
         if (seen.has(key)) {
           status = 'skipped';
-          response = 'SKIPPED: duplicate contact_no + cupon_code in this file';
+          response = 'SKIPPED: duplicate contact_no + stage in this file';
         } else {
           seen.add(key);
         }

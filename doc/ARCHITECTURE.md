@@ -3,8 +3,8 @@
 ## 1. Requirements
 
 **Functional**
-- Upload a CSV with `contact_no`, `outlate_name`, `cupon_code`, `stage` (stage is optional and only carried through) through an HTTP API.
-- Send one SMS per recipient (outlet name and coupon id) through the SSL Wireless SMS Plus API.
+- Upload a CSV with `contact_no`, `outlate_name`, `stage` (`cupon_code` is optional and only carried through) through an HTTP API.
+- Send one SMS per recipient (outlet name and stage) through the SSL Wireless SMS Plus API.
 - Produce a result CSV: `contact_no`, `stage`, `status` (SENT / FAILED / SKIPPED / UNKNOWN ...), `response` (the row's API + `smsinfo` result as compact JSON), `message`, `sending_time`.
 - Postman collection and environment.
 
@@ -105,7 +105,7 @@ the API result and its own `smsinfo` entry.
 
 ### ADR-006: Block re-uploading a file that was already sent
 - **Status**: Accepted
-- **Decision**: The file's SHA-256 is stored. Uploading identical content again returns `409` with the earlier job id unless `force=true`. Rows duplicated inside one file (same number and coupon) are skipped.
+- **Decision**: The file's SHA-256 is stored. Uploading identical content again returns `409` with the earlier job id unless `force=true`. Rows duplicated inside one file (same number and stage) are skipped.
 - **Consequences**: Protects against the most likely human error at this scale: sending the same list twice.
 
 ### ADR-007: Retries only for transient errors, with the same `csms_id`

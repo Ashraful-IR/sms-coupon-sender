@@ -27,7 +27,8 @@ const config = {
   autoResume: process.env.AUTO_RESUME !== 'false',
   maxRetries: num(process.env.MAX_RETRIES, 2),
   timeoutMs: num(process.env.REQUEST_TIMEOUT_MS, 15000),
-  template: process.env.SMS_TEMPLATE || 'Your coupon {cupon_code} is valid at {outlate_name}.',
+  // Campaign text. {outlate_name} is the outlet, {stage} renders as a Bangla ordinal (1 -> ১ম, 2 -> ২য় ...).
+  template: process.env.SMS_TEMPLATE || '(v2tech) প্রিয় ব্রেক কমিউনিটি মেম্বার, {outlate_name} ব্রেকস্টেশন আউটলেটে এসে আপনার {stage} কুপনটি ব্যবহার করে জিতে নিন আকর্ষণীয় পুরস্কার, প্রোগ্রামের সময়সীমা ১০ই অক্টোবর থেকে ১১ই ডিসেম্বর পর্যন্ত। মনে রাখবেন, ব্রেক কমিউনিটির সাথে প্রতি মুহূর্ত জমে যায়, সেরা ব্রেক সবসময়।',
   ssl: {
     baseUrl,
     singleUrl: process.env.SSL_URL || `${baseUrl}/api/v3/send-sms`,

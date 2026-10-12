@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS rows (
   contact_no     TEXT,
   outlate_name   TEXT,
   cupon_code     TEXT,
-  stage          TEXT,              -- carried through to the result CSV
+  stage          TEXT,              -- required: rendered into the SMS and exported in the result CSV
   msisdn         TEXT,
   status         TEXT NOT NULL,     -- pending | sending | sent | failed | skipped | unknown | dry_run
   response       TEXT,
