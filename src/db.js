@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   id            TEXT PRIMARY KEY,
   status        TEXT NOT NULL,      -- loading | ready | running | halted | completed | cancelled | failed
   dry_run       INTEGER NOT NULL DEFAULT 0,
+  mode          TEXT NOT NULL DEFAULT 'single',  -- single | bulk | dynamic (endpoint used to send)
   original_name TEXT,
   file_hash     TEXT,
   csms_prefix   TEXT NOT NULL,
@@ -52,6 +53,9 @@ if (rowCols.includes('contact_number')) {
 }
 if (!db.prepare('PRAGMA table_info(rows)').all().some((c) => c.name === 'stage')) {
   db.exec('ALTER TABLE rows ADD COLUMN stage TEXT');
+}
+if (!db.prepare('PRAGMA table_info(jobs)').all().some((c) => c.name === 'mode')) {
+  db.exec("ALTER TABLE jobs ADD COLUMN mode TEXT NOT NULL DEFAULT 'single'");
 }
 
 module.exports = db;

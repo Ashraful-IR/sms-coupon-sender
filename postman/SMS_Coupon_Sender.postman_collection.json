@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "9a3c1d77-6a52-4f0b-8e51-2b7d4f3c1a02",
     "name": "SMS Coupon Sender",
-    "description": "Flow: 1) Upload CSV  2) Start (dry run first)  3) Poll status  4) Download result CSV. Select the 'SMS Coupon Sender - Local' environment first.",
+    "description": "Flow: 1) Upload CSV  2) Start (dry run first)  3) Poll status  4) Download result CSV. Select the 'SMS Coupon Sender - Local' environment first. The server's SMS_MODE (.env) decides which Push SMS endpoint is used - single, bulk or dynamic - and every job reports its choice as 'mode'.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -50,7 +50,7 @@
           ]
         },
         "url": { "raw": "{{base_url}}/api/jobs", "host": ["{{base_url}}"], "path": ["api", "jobs"] },
-        "description": "Pick your CSV in the 'file' field. The response shows counts (pending / skipped), a preview of the first 3 SMS texts and an estimated duration. Check the preview before starting. Uploading an already-sent file returns 409 unless force=true."
+        "description": "Pick your CSV in the 'file' field. The response shows counts (pending / skipped), a preview of the first 3 SMS texts, an estimated duration and 'mode' (the Push SMS endpoint this job will use). Check the preview before starting. Uploading an already-sent file returns 409 unless force=true."
       }
     },
     {
@@ -79,7 +79,7 @@
         "method": "GET",
         "header": [],
         "url": { "raw": "{{base_url}}/api/jobs/{{job_id}}", "host": ["{{base_url}}"], "path": ["api", "jobs", "{{job_id}}"] },
-        "description": "status: ready | running | halted | completed | cancelled | failed. counts: pending, sending, sent, failed, skipped, unknown, dry_run."
+        "description": "status: ready | running | halted | completed | cancelled | failed. mode: single | bulk | dynamic (the Push SMS endpoint in use, fixed when the job starts). counts: pending, sending, sent, failed, skipped, unknown, dry_run."
       }
     },
     {
@@ -97,7 +97,7 @@
         "method": "GET",
         "header": [],
         "url": { "raw": "{{base_url}}/api/jobs/{{job_id}}/result", "host": ["{{base_url}}"], "path": ["api", "jobs", "{{job_id}}", "result"] },
-        "description": "Columns: contact_no, stage, status (SENT / FAILED / SKIPPED / UNKNOWN / PENDING), response, message, sending_time. Original file order. Rows not processed yet have an empty response. Use 'Send and Download' in Postman to save it."
+        "description": "Columns: contact_no, stage, status (PENDING / SENDING / SENT / FAILED / SKIPPED / UNKNOWN / DRY_RUN), response, message, sending_time. 'response' is compact JSON for that row: the API result (status, status_code, error_message) plus the SMS result (sms_status, status_message, msisdn, reference_id). Original file order. Rows not processed yet have an empty response. Use 'Send and Download' in Postman to save it."
       }
     },
     {

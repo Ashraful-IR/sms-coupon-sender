@@ -5,7 +5,7 @@ const { parse } = require('csv-parse');
 const { stringify } = require('csv-stringify/sync');
 const db = require('./db');
 const config = require('./config');
-const { sendSms } = require('./smsClient');
+const { sendSingle, sendBulk, sendDynamic, credentialsConfigured } = require('./smsClient');
 const { normalizeMsisdn, render } = require('./utils');
 
 // "stage" is optional in the upload; it is carried through to the result CSV.
@@ -33,6 +33,7 @@ function getJob(id) {
     id: j.id,
     status: j.status,
     dryRun: !!j.dry_run,
+    mode: j.mode || 'single',
     originalName: j.original_name,
     total: j.total,
     counts,
@@ -63,8 +64,8 @@ async function createJobFromFile(filePath, originalName, force) {
   }
 
   const id = crypto.randomUUID();
-  db.prepare(`INSERT INTO jobs (id, status, original_name, file_hash, csms_prefix, created_at) VALUES (?, 'loading', ?, ?, ?, ?)`)
-    .run(id, originalName, hash, crypto.randomBytes(5).toString('hex'), now());
+  db.prepare(`INSERT INTO jobs (id, status, mode, original_name, file_hash, csms_prefix, created_at) VALUES (?, 'loading', ?, ?, ?, ?, ?)`)
+    .run(id, config.smsMode, originalName, hash, crypto.randomBytes(5).toString('hex'), now());
 
   const insertRow = db.prepare(
     `INSERT INTO rows (job_id, n, contact_no, outlate_name, cupon_code, stage, msisdn, status, response) VALUES (?,?,?,?,?,?,?,?,?)`
@@ -133,11 +134,13 @@ function startJob(id, dryRun) {
   if (!['ready', 'halted'].includes(j.status)) throw new HttpError(409, `Job is ${j.status}; only "ready" or "halted" jobs can be started`);
 
   const effectiveDry = j.status === 'halted' ? !!j.dry_run : dryRun; // a resumed job keeps its original mode
-  if (!effectiveDry && (!config.ssl.apiToken || !config.ssl.sid)) {
+  if (!effectiveDry && !credentialsConfigured()) {
     throw new HttpError(500, 'SSL_API_TOKEN / SSL_SID are not configured on the server');
   }
-  db.prepare(`UPDATE jobs SET status = 'running', dry_run = ?, error = NULL, started_at = COALESCE(started_at, ?) WHERE id = ?`)
-    .run(effectiveDry ? 1 : 0, now(), id);
+  // A resumed job keeps the endpoint it was started with, so a batch never changes shape mid-run.
+  const mode = j.status === 'halted' ? j.mode : config.smsMode;
+  db.prepare(`UPDATE jobs SET status = 'running', dry_run = ?, mode = ?, error = NULL, started_at = COALESCE(started_at, ?) WHERE id = ?`)
+    .run(effectiveDry ? 1 : 0, mode, now(), id);
   launch(id);
   return getJob(id);
 }
@@ -180,45 +183,107 @@ function makeLimiter(ratePerSecond) {
   };
 }
 
+/* --------------------------------------------------------------- sending */
+
+// Dynamic replies carry our csms_id back; bulk replies only echo the msisdn, so match on that.
+const matchKey = (mode, item) => (mode === 'bulk' ? item.msisdn : item.csmsId);
+
+function mapResults(mode, batch, res) {
+  const buckets = new Map();
+  for (const r of res.results) {
+    const key = matchKey(mode, r);
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(r);
+  }
+  const used = new Set();
+  return batch.map((p) => {
+    const bucket = buckets.get(matchKey(mode, { msisdn: p.row.msisdn, csmsId: p.csmsId })) || [];
+    const hit = bucket.find((r) => !used.has(r)) || null;
+    if (hit) used.add(hit);
+    return [p, hit];
+  });
+}
+
+const str = (v) => (v === undefined || v === null ? '' : v);
+
+// Per-row outcome stored in the `response` column, compact so a batch reply is not copied 100 times.
+function rowResponse(res, hit) {
+  const base = { status: str(res.apiStatus) || 'FAILED', status_code: res.statusCode, error_message: str(res.errorMessage) };
+  if (!hit) {
+    return JSON.stringify({ ...base, error_message: base.error_message || 'No per-recipient result returned', sms_status: '', status_message: '' });
+  }
+  return JSON.stringify({ ...base, sms_status: str(hit.smsStatus), status_message: str(hit.statusMessage), msisdn: str(hit.msisdn), reference_id: str(hit.referenceId) });
+}
+
+function sendBatch(mode, batch) {
+  if (mode === 'dynamic') {
+    return sendDynamic({ messages: batch.map((p) => ({ msisdn: p.row.msisdn, sms: p.message, csmsId: p.csmsId })) });
+  }
+  if (mode === 'bulk') {
+    return sendBulk({ msisdns: batch.map((p) => p.row.msisdn), sms: batch[0].message, batchCsmsId: batch[0].csmsId });
+  }
+  return sendSingle({ msisdn: batch[0].row.msisdn, sms: batch[0].message, csmsId: batch[0].csmsId });
+}
+
+/* ------------------------------------------------------------ job runner */
+
 async function runJob(id, ctl) {
   const job = db.prepare('SELECT * FROM jobs WHERE id = ?').get(id);
   const dryRun = !!job.dry_run;
+  const mode = job.mode || 'single';
 
-  const pick = db.prepare(`SELECT n, contact_no, outlate_name, cupon_code, stage, msisdn FROM rows WHERE job_id = ? AND status = 'pending' ORDER BY n LIMIT 500`);
-  const markSending = db.prepare(`UPDATE rows SET status = 'sending' WHERE job_id = ? AND n = ?`);
-  const backToPending = db.prepare(`UPDATE rows SET status = 'pending' WHERE job_id = ? AND n = ?`);
+  const pick = db.prepare(`SELECT n, contact_no, outlate_name, cupon_code, stage, msisdn FROM rows WHERE job_id = ? AND status = 'pending' ORDER BY n LIMIT ?`);
+  const markSending = db.prepare(`UPDATE rows SET status = 'sending' WHERE job_id = ? AND n = ? AND status = 'pending'`);
+  const release = db.prepare(`UPDATE rows SET status = 'pending' WHERE job_id = ? AND n = ? AND status = 'sending'`);
   const finish = db.prepare(`UPDATE rows SET status = ?, response = ?, message = ?, sending_time = ? WHERE job_id = ? AND n = ?`);
 
+  // Claiming runs inside one synchronous transaction, so two workers can never take the same row.
+  const claim = db.transaction((rows) => rows.filter((r) => markSending.run(id, r.n).changes));
+
+  // Take the next unit of work: one row (single) or one request-sized batch (bulk / dynamic).
+  function claimNext() {
+    if (mode === 'single') {
+      const rows = pick.all(id, 1);
+      return rows.length ? claim(rows) : [];
+    }
+    const candidates = pick.all(id, config.batchSize);
+    if (!candidates.length) return [];
+    if (mode === 'dynamic') return claim(candidates);
+    // Bulk sends one common body, so only rows that render to the same text share a request.
+    const body = render(config.template, candidates[0]);
+    return claim(candidates.filter((r) => render(config.template, r) === body));
+  }
+
   const limiter = makeLimiter(config.ratePerSecond);
-  let queue = [];
   let consecutiveFailures = 0;
   let haltReason = null;
 
   const worker = async () => {
     for (;;) {
       if (ctl.cancelled || haltReason) return;
-      if (!queue.length) {
-        queue = pick.all(id);
-        if (!queue.length) return;
-      }
-      const row = queue.shift();
-      markSending.run(id, row.n); // claimed synchronously, so no other worker can take it
+      const rows = claimNext();
+      if (!rows.length) return;
 
       await limiter();
-      if (ctl.cancelled || haltReason) { backToPending.run(id, row.n); return; }
+      if (ctl.cancelled || haltReason) { for (const r of rows) release.run(id, r.n); return; }
 
-      const message = render(config.template, row);
-      const sentAt = now();
+      const batch = rows.map((row) => ({ row, message: render(config.template, row), csmsId: `${job.csms_prefix}-${row.n}` }));
+
       if (dryRun) {
-        finish.run('dry_run', 'DRY_RUN: not sent', message, sentAt, id, row.n);
+        const at = now();
+        for (const p of batch) finish.run('dry_run', 'DRY_RUN: not sent', p.message, at, id, p.row.n);
         continue;
       }
-      const r = await sendSms({ msisdn: row.msisdn, sms: message, csmsId: `${job.csms_prefix}-${row.n}` });
-      finish.run(r.ok ? 'sent' : 'failed', r.body, message, sentAt, id, row.n);
-      if (r.ok) {
-        consecutiveFailures = 0;
-      } else if (++consecutiveFailures >= config.failureLimit && !haltReason) {
-        haltReason = `Stopped after ${config.failureLimit} consecutive failures. Last response: ${String(r.body).slice(0, 300)}`;
+
+      const res = await sendBatch(mode, batch);
+      const at = now();
+      for (const [p, hit] of mapResults(mode, batch, res)) {
+        const ok = !!(hit && hit.ok);
+        finish.run(ok ? 'sent' : 'failed', rowResponse(res, hit), p.message, at, id, p.row.n);
+        consecutiveFailures = ok ? 0 : consecutiveFailures + 1;
+        if (!haltReason && consecutiveFailures >= config.failureLimit) {
+          haltReason = `Stopped after ${config.failureLimit} consecutive failures. Last response: ${String(res.errorMessage || res.raw).slice(0, 300)}`;
+        }
       }
     }
   };
@@ -247,7 +312,7 @@ function recoverOnStartup() {
     db.prepare('DELETE FROM jobs WHERE id = ?').run(j.id);
   }
   for (const j of db.prepare(`SELECT id, dry_run FROM jobs WHERE status = 'running'`).all()) {
-    if (config.autoResume && (j.dry_run || (config.ssl.apiToken && config.ssl.sid))) {
+    if (config.autoResume && (j.dry_run || credentialsConfigured())) {
       console.log(`Resuming job ${j.id}`);
       launch(j.id);
     } else {
