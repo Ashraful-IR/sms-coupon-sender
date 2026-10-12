@@ -136,14 +136,23 @@ Everything lives under `DATA_DIR` (default `./data`, relative to the project roo
 |---|---|---|
 | Database (jobs + every row) | `data/sms.db` | SQLite in WAL mode; `sms.db-wal` and `sms.db-shm` sit next to it. This is the source of truth |
 | Uploaded CSV | `data/uploads/<random>.csv` | Temporary. Deleted as soon as the file has been parsed into the database |
-| Result CSV | **not stored as a file** | Generated from `data/sms.db` on each request and streamed to you |
+| Result CSV | `data/Report- <time>;<date>-<jobId>.csv` | Written automatically when the job finishes; also downloadable at any time through the API |
 
-The result CSV is not written to disk by the server - it is rebuilt from the database every time you
-call `GET /api/jobs/:id/result` and sent as a download named `result-<jobId>.csv`. So it can be
-requested at any point, even mid-run (unprocessed rows appear with an empty `response`), and a new job
-id means a new file name. **You choose where it lands**: the `-o "result-$JOB_ID.csv"` in step 4 saves
-it into the current directory; a browser or Postman's *Send and Download* will use your download
-folder instead.
+When a job reaches a terminal state (`completed`, `halted`, `cancelled` or `failed`) the server writes
+its report into `data/` by itself, named `Report- <time>;<date>-<jobId>.csv` in local time - for example
+`Report- 14-30-05;12-10-2026-5335ed1c.csv`. The time is written with dashes because `:` is not a legal
+character in a Windows file name (it would create an NTFS alternate data stream instead of a file), and
+the short job id keeps two jobs that finish in the same second from overwriting each other. The report is
+built as a `.tmp` file and then renamed, so you can never catch a half-written file, and nothing is
+written while the job is still running. `GET /api/jobs/:id` reports the full path as `resultFile`, which
+is `null` until the file exists.
+
+The same report is also served at `GET /api/jobs/:id/result`, rebuilt from the database and streamed to
+you on each request - it can be requested at any point, even mid-run (unprocessed rows appear with an
+empty `response`), and it carries the same file name in its `Content-Disposition`. The two are produced
+by the same writer, so the download is byte-identical to the saved file. **You choose where a download lands**: the
+`-o "result-$JOB_ID.csv"` in step 4 saves it into the current directory; a browser or Postman's
+*Send and Download* will use your download folder instead.
 
 ### Result CSV columns
 

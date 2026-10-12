@@ -97,6 +97,10 @@ async function main() {
   console.log(`     counts    ${JSON.stringify(cur.counts)}`);
   if (cur.error) console.log(`     error     ${cur.error}`);
   console.log('');
+  if (cur.resultFile) {
+    const finished = !['running', 'ready'].includes(cur.status);
+    console.log(`  Saved on the server : ${cur.resultFile}${finished ? '' : ' (written when the job finishes)'}`);
+  }
   console.log('  Download the result CSV:');
   console.log(`    curl -s -H "x-api-key: $API_KEY" -o "result-${job.id}.csv" "${base}/api/jobs/${job.id}/result"`);
   console.log('');

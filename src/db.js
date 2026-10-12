@@ -57,5 +57,9 @@ if (!db.prepare('PRAGMA table_info(rows)').all().some((c) => c.name === 'stage')
 if (!db.prepare('PRAGMA table_info(jobs)').all().some((c) => c.name === 'mode')) {
   db.exec("ALTER TABLE jobs ADD COLUMN mode TEXT NOT NULL DEFAULT 'single'");
 }
+// Name of the report file on disk. Time-based, so it can only be known once written.
+if (!db.prepare('PRAGMA table_info(jobs)').all().some((c) => c.name === 'result_file')) {
+  db.exec('ALTER TABLE jobs ADD COLUMN result_file TEXT');
+}
 
 module.exports = db;

@@ -1,4 +1,5 @@
 const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
 const { once } = require('events');
 const { parse } = require('csv-parse');
@@ -34,6 +35,8 @@ function getJob(id) {
     status: j.status,
     dryRun: !!j.dry_run,
     mode: j.mode || 'single',
+    // Set when the job reaches a terminal state; null until the file exists.
+    resultFile: j.result_file ? path.join(config.dataDir, j.result_file) : null,
     originalName: j.original_name,
     total: j.total,
     counts,
@@ -153,6 +156,7 @@ function cancelJob(id) {
     ctl.cancelled = true; // runner finishes in-flight requests, then marks the job cancelled
   } else if (['ready', 'halted'].includes(j.status)) {
     db.prepare(`UPDATE jobs SET status = 'cancelled', finished_at = ? WHERE id = ?`).run(now(), id);
+    saveResultFile(id); // never launched, so nothing else will write its CSV
   } else {
     throw new HttpError(409, `Job is ${j.status}; nothing to cancel`);
   }
@@ -167,6 +171,7 @@ function launch(id) {
       .catch((e) => {
         console.error(`Job ${id} crashed`, e);
         db.prepare(`UPDATE jobs SET status = 'failed', error = ?, finished_at = ? WHERE id = ?`).run(e.message, now(), id);
+        saveResultFile(id); // a crash still ends the run, so still record what happened
       })
       .finally(() => running.delete(id));
   });
@@ -297,6 +302,8 @@ async function runJob(id, ctl) {
   } else {
     db.prepare(`UPDATE jobs SET status = 'completed', finished_at = ? WHERE id = ?`).run(now(), id);
   }
+  // The job is finished, so leave a CSV on disk as well as the download endpoint.
+  await saveResultFile(id);
   console.log(`Job ${id} ->`, getJob(id).status, getJob(id).counts);
 }
 
@@ -317,18 +324,33 @@ function recoverOnStartup() {
       launch(j.id);
     } else {
       db.prepare(`UPDATE jobs SET status = 'halted', error = 'Server restarted; call /start to resume' WHERE id = ?`).run(j.id);
+      saveResultFile(j.id); // parked instead of resumed: record where it stopped
     }
   }
 }
 
 /* --------------------------------------------------------------- result */
 
-async function streamResult(id, res) {
-  const stmt = db.prepare(`SELECT contact_no, stage, status, response, message, sending_time FROM rows WHERE job_id = ? ORDER BY n`);
-  const write = async (chunk) => { if (!res.write(chunk)) await once(res, 'drain'); };
+// Report file name: Report- <time>;<date>-<jobId>.csv, e.g. "Report- 14-30-05;12-10-2026-5335ed1c.csv".
+// Times are local. ':' is not a legal character in a Windows file name (it would create an
+// NTFS alternate data stream instead of a file), so the time separators are dashes. The job id
+// suffix keeps two jobs that finish in the same second from overwriting each other.
+function reportName(id, when = new Date()) {
+  const p2 = (n) => String(n).padStart(2, '0');
+  const time = `${p2(when.getHours())}-${p2(when.getMinutes())}-${p2(when.getSeconds())}`;
+  const date = `${p2(when.getDate())}-${p2(when.getMonth() + 1)}-${when.getFullYear()}`;
+  return `Report- ${time};${date}-${id.slice(0, 8)}.csv`;
+}
 
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="result-${id}.csv"`);
+const resultPath = (name) => path.join(config.dataDir, name);
+
+// The gateway reply for every row is stored in `response` (see rowResponse), so the
+// CSV is self-contained: status plus sms_status / status_message / reference_id per row.
+// One writer shared by the download endpoint and the on-disk file, so the two can never drift.
+async function writeResultCsv(id, out) {
+  const stmt = db.prepare(`SELECT contact_no, stage, status, response, message, sending_time FROM rows WHERE job_id = ? ORDER BY n`);
+  const write = async (chunk) => { if (!out.write(chunk)) await once(out, 'drain'); };
+
   await write('\uFEFF' + stringify([RESULT_COLUMNS])); // BOM so Excel shows Bangla correctly
 
   let buf = [];
@@ -337,7 +359,38 @@ async function streamResult(id, res) {
     if (buf.length >= 1000) { await write(stringify(buf)); buf = []; }
   }
   if (buf.length) await write(stringify(buf));
+}
+
+async function streamResult(id, res) {
+  // Same name the file on disk would have, so a download and a saved report match.
+  const j = db.prepare('SELECT result_file, finished_at FROM jobs WHERE id = ?').get(id);
+  const name = (j && j.result_file) || reportName(id, j && j.finished_at ? new Date(j.finished_at) : new Date());
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+  await writeResultCsv(id, res);
   res.end();
+}
+
+// Saved once a job reaches a terminal state. Built in a .tmp file and renamed, so a
+// reader never sees a half-written CSV. Never throws: a disk problem must not fail the job.
+async function saveResultFile(id) {
+  const name = reportName(id);
+  const target = resultPath(name);
+  const tmp = `${target}.tmp`;
+  const stream = fs.createWriteStream(tmp);
+  const failed = new Promise((_, reject) => stream.on('error', reject));
+  try {
+    await Promise.race([writeResultCsv(id, stream), failed]);
+    await new Promise((resolve, reject) => stream.end((err) => (err ? reject(err) : resolve())));
+    fs.renameSync(tmp, target);
+    db.prepare('UPDATE jobs SET result_file = ? WHERE id = ?').run(name, id);
+    console.log(`Result CSV written: ${name}`);
+    return name;
+  } catch (e) {
+    console.error(`Could not write the result CSV for job ${id}: ${e.message}`);
+    try { fs.unlinkSync(tmp); } catch (_) { /* nothing to clean up */ }
+    return null;
+  }
 }
 
 module.exports = { createJobFromFile, getJob, listJobs, startJob, cancelJob, recoverOnStartup, streamResult, HttpError };
