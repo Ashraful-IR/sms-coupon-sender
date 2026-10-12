@@ -1,0 +1,112 @@
+{
+  "info": {
+    "_postman_id": "9a3c1d77-6a52-4f0b-8e51-2b7d4f3c1a02",
+    "name": "SMS Coupon Sender",
+    "description": "Flow: 1) Upload CSV  2) Start (dry run first)  3) Poll status  4) Download result CSV. Select the 'SMS Coupon Sender - Local' environment first.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      { "key": "key", "value": "x-api-key", "type": "string" },
+      { "key": "value", "value": "{{api_key}}", "type": "string" },
+      { "key": "in", "value": "header", "type": "string" }
+    ]
+  },
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "GET",
+        "header": [],
+        "url": { "raw": "{{base_url}}/health", "host": ["{{base_url}}"], "path": ["health"] }
+      }
+    },
+    {
+      "name": "1. Upload CSV (validate and load, sends nothing)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Loaded (201)', () => pm.response.to.have.status(201));",
+              "const body = pm.response.json();",
+              "if (body.job && body.job.id) { pm.environment.set('job_id', body.job.id); }",
+              "console.log('Preview of messages:', body.preview, '| estimated minutes:', body.estimatedMinutes);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            { "key": "file", "type": "file", "src": [] },
+            { "key": "force", "value": "false", "type": "text", "description": "Set true to upload a file that was already sent" }
+          ]
+        },
+        "url": { "raw": "{{base_url}}/api/jobs", "host": ["{{base_url}}"], "path": ["api", "jobs"] },
+        "description": "Pick your CSV in the 'file' field. The response shows counts (pending / skipped), a preview of the first 3 SMS texts and an estimated duration. Check the preview before starting. Uploading an already-sent file returns 409 unless force=true."
+      }
+    },
+    {
+      "name": "2. Start - DRY RUN (no SMS sent)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"dry_run\": true\n}" },
+        "url": { "raw": "{{base_url}}/api/jobs/{{job_id}}/start", "host": ["{{base_url}}"], "path": ["api", "jobs", "{{job_id}}", "start"] },
+        "description": "Runs the full pipeline without calling SSL Wireless. A dry-run job cannot be re-used for a real send: upload the file again."
+      }
+    },
+    {
+      "name": "3. Start - REAL SEND (costs SMS credits)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"dry_run\": false\n}" },
+        "url": { "raw": "{{base_url}}/api/jobs/{{job_id}}/start", "host": ["{{base_url}}"], "path": ["api", "jobs", "{{job_id}}", "start"] },
+        "description": "Sends real SMS. Also use this to resume a job with status 'halted' after fixing the cause (token, balance...)."
+      }
+    },
+    {
+      "name": "4. Get job status",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": { "raw": "{{base_url}}/api/jobs/{{job_id}}", "host": ["{{base_url}}"], "path": ["api", "jobs", "{{job_id}}"] },
+        "description": "status: ready | running | halted | completed | cancelled | failed. counts: pending, sending, sent, failed, skipped, unknown, dry_run."
+      }
+    },
+    {
+      "name": "5. Cancel job",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": { "raw": "{{base_url}}/api/jobs/{{job_id}}/cancel", "host": ["{{base_url}}"], "path": ["api", "jobs", "{{job_id}}", "cancel"] },
+        "description": "Stops sending. Requests already in flight finish; the rest stay 'pending' and are never sent."
+      }
+    },
+    {
+      "name": "6. Download result CSV",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": { "raw": "{{base_url}}/api/jobs/{{job_id}}/result", "host": ["{{base_url}}"], "path": ["api", "jobs", "{{job_id}}", "result"] },
+        "description": "Columns: contact_no, stage, status (SENT / FAILED / SKIPPED / UNKNOWN / PENDING), response, message, sending_time. Original file order. Rows not processed yet have an empty response. Use 'Send and Download' in Postman to save it."
+      }
+    },
+    {
+      "name": "List jobs",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": { "raw": "{{base_url}}/api/jobs", "host": ["{{base_url}}"], "path": ["api", "jobs"] }
+      }
+    }
+  ]
+}
