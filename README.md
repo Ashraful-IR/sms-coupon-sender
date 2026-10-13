@@ -127,6 +127,21 @@ curl -s -H "x-api-key: $API_KEY" -o "result-$JOB_ID.csv" "$BASE/api/jobs/$JOB_ID
 Stop a running job at any time (`POST /api/jobs/$JOB_ID/cancel`), and list recent jobs with
 `GET /api/jobs`. All `/api` routes need the `x-api-key` header; `/health` does not.
 
+### One command instead of four calls
+
+`scripts/send.js` does the upload, the start and the status check in one go, using the same `.env`:
+
+```bash
+npm run upload -- samples/contacts.csv              # upload + dry run
+npm run send:live -- samples/contacts.csv           # upload + REAL send
+```
+
+A dry run **waits for the job to finish** and then prints the report file the server wrote, because
+reviewing that CSV is the point of a dry run. A live send prints one snapshot and exits (add `--wait`
+to follow it to the end). `--force` re-uploads a file that was already sent, `--no-wait` gives the
+snapshot behaviour for a dry run too. Ctrl+C stops the polling, never the job: it keeps running on the
+server and its report is written when it finishes.
+
 ## Where files are stored
 
 Everything lives under `DATA_DIR` (default `./data`, relative to the project root).
@@ -139,12 +154,18 @@ Everything lives under `DATA_DIR` (default `./data`, relative to the project roo
 
 When a job reaches a terminal state (`completed`, `halted`, `cancelled` or `failed`) the server writes
 its report into `data/` by itself, named `Report- <time>;<date>-<jobId>.csv` in local time - for example
-`Report- 14-30-05;12-10-2026-5335ed1c.csv`. The time is written with dashes because `:` is not a legal
-character in a Windows file name (it would create an NTFS alternate data stream instead of a file), and
-the short job id keeps two jobs that finish in the same second from overwriting each other. The report is
-built as a `.tmp` file and then renamed, so you can never catch a half-written file, and nothing is
-written while the job is still running. `GET /api/jobs/:id` reports the full path as `resultFile`, which
-is `null` until the file exists.
+`Report- 14-30-05;12-10-2026-5335ed1c.csv`. **A dry run gets its report too** (every row as `DRY_RUN`,
+with the exact text that would be sent), which is what makes a dry run reviewable offline. The time is
+written with dashes because `:` is not a legal character in a Windows file name (it would create an NTFS
+alternate data stream instead of a file), and the short job id keeps two jobs that finish in the same
+second from overwriting each other. The report is built as a `.tmp` file and then renamed, so you can
+never catch a half-written file, and nothing is written while the job is still running.
+`GET /api/jobs/:id` reports the full path as `resultFile`, which is `null` until the file exists.
+
+The job is marked finished just before the report is written, so killing the process in that window
+(Ctrl+C, a crash, a reboot) can leave a finished job with no report and a stray `.tmp` file. On the next
+start the server writes every missing report and deletes the abandoned `.tmp` files, so a finished job
+always ends up with its CSV.
 
 The same report is also served at `GET /api/jobs/:id/result`, rebuilt from the database and streamed to
 you on each request - it can be requested at any point, even mid-run (unprocessed rows appear with an

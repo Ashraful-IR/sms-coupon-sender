@@ -7,8 +7,15 @@
  *   npm run send:live -- samples/contacts.csv   upload + REAL SEND (costs credits)
  *
  * Flags:
- *   --force   allow re-uploading a file that was already sent
- *   --wait    keep polling until the job finishes instead of printing one snapshot
+ *   --force     allow re-uploading a file that was already sent
+ *   --wait      keep polling until the job finishes instead of printing one snapshot
+ *   --no-wait   do not wait: print one snapshot and exit (the default for a live send)
+ *
+ * A dry run waits for the job to finish by itself: the server writes the report CSV into
+ * DATA_DIR (default ./data) only once the job is finished, and reviewing that file is the
+ * whole point of a dry run. A live send of a large list can take hours, so it prints one
+ * snapshot unless you pass --wait. Ctrl+C stops the polling but never the job: it keeps
+ * running on the server, and its report is written (or finished at the next startup).
  *
  * SERVICE_URL overrides the target (default http://localhost:$PORT).
  */
@@ -24,7 +31,7 @@ const positional = args.filter((a) => !a.startsWith('--'));
 
 const LIVE = flags.has('--live');
 const FORCE = flags.has('--force');
-const WAIT = flags.has('--wait');
+const WAIT = flags.has('--wait') || (!LIVE && !flags.has('--no-wait'));
 const file = positional[0] || 'samples/contacts.csv';
 const base = (process.env.SERVICE_URL || `http://localhost:${config.port}`).replace(/\/+$/, '');
 
@@ -84,7 +91,7 @@ async function main() {
   console.log(`  2. started   status ${started.status} | dryRun ${started.dryRun} | mode ${started.mode}`);
   console.log('');
 
-  // 3) Status.
+  // 3) Status. Poll until the job stops running, so the report file is on disk before we exit.
   let cur = started;
   while (WAIT && cur.status === 'running') {
     await sleep(2000);
@@ -100,6 +107,10 @@ async function main() {
   if (cur.resultFile) {
     const finished = !['running', 'ready'].includes(cur.status);
     console.log(`  Saved on the server : ${cur.resultFile}${finished ? '' : ' (written when the job finishes)'}`);
+  } else if (cur.status === 'running') {
+    console.log('  No report file yet: it is written into DATA_DIR as soon as the job finishes.');
+  } else {
+    console.log('  No report file: the server could not write it. Check the server log.');
   }
   console.log('  Download the result CSV:');
   console.log(`    curl -s -H "x-api-key: $API_KEY" -o "result-${job.id}.csv" "${base}/api/jobs/${job.id}/result"`);

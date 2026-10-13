@@ -329,6 +329,24 @@ function recoverOnStartup() {
       saveResultFile(j.id); // parked instead of resumed: record where it stopped
     }
   }
+  finishMissingReports();
+}
+
+// A finished job is marked in the database *before* its report is written, so a kill in that
+// window (Ctrl+C while the CSV is being written) leaves a job with no usable report and a
+// half-written "Report- ....csv.tmp" behind. Both are cleaned up here, at startup.
+function finishMissingReports() {
+  for (const j of db.prepare(
+    `SELECT id FROM jobs WHERE result_file IS NULL AND status IN ('completed','halted','cancelled','failed') ORDER BY created_at`
+  ).all()) {
+    console.log(`Job ${j.id} finished without a report on disk; writing it now`);
+    saveResultFile(j.id);
+  }
+
+  const tmpFiles = fs.readdirSync(config.dataDir).filter((f) => f.startsWith('Report-') && f.endsWith('.csv.tmp'));
+  for (const f of tmpFiles) {
+    try { fs.unlinkSync(resultPath(f)); console.log(`Removed incomplete report ${f}`); } catch (_) { /* leave it */ }
+  }
 }
 
 /* --------------------------------------------------------------- result */
